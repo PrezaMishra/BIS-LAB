@@ -1,0 +1,189 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+from collections import deque
+import time
+import math
+
+def simulate_network(packet_size_bytes, send_rate_pps, buffer_size_pkts, sim_time=10.0, link_bw_mbps=10.0, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
+
+    link_bps = link_bw_mbps * 1e6
+    link_Bps = link_bps / 8.0
+    service_time = packet_size_bytes / link_Bps
+    t = 0.0
+    next_arrival = np.random.exponential(1.0 / send_rate_pps) if send_rate_pps > 0 else float('inf')
+    queue = deque()
+    next_departure = float('inf')
+    in_service = False
+
+    total_arrivals = 0
+    total_served = 0
+    total_dropped = 0
+    total_delay = 0.0
+
+    while t < sim_time:
+        if next_arrival <= next_departure:
+            t = next_arrival
+            total_arrivals += 1
+            if len(queue) + (1 if in_service else 0) < buffer_size_pkts + (1 if in_service else 0):
+                if not in_service and len(queue) == 0:
+                    in_service = True
+                    next_departure = t + service_time
+                    queue.append(t)
+                else:
+                    queue.append(t)
+            else:
+                total_dropped += 1
+            ia = np.random.exponential(1.0 / send_rate_pps) if send_rate_pps > 0 else float('inf')
+            next_arrival = t + ia
+        else:
+            t = next_departure
+            if len(queue) > 0:
+                arrival_time = queue.popleft()
+                total_served += 1
+                delay = t - arrival_time
+                total_delay += delay
+            if len(queue) > 0:
+                next_departure = t + service_time
+                in_service = True
+            else:
+                next_departure = float('inf')
+                in_service = False
+
+    loss_rate = total_dropped / total_arrivals if total_arrivals > 0 else 0.0
+    avg_delay = total_delay / total_served if total_served > 0 else 0.0
+    throughput_pps = total_served / sim_time
+
+    return {
+        'avg_delay_s': avg_delay,
+        'loss_rate': loss_rate,
+        'throughput_pps': throughput_pps,
+        'total_arrivals': total_arrivals,
+        'total_served': total_served,
+        'total_dropped': total_dropped
+    }
+
+def objective(x, sim_time=10.0, seed=None):
+    packet_size = float(x[0])
+    send_rate = float(x[1])
+    buffer_size = max(1, int(round(x[2])))
+    res = simulate_network(packet_size, send_rate, buffer_size, sim_time=sim_time, seed=seed)
+    avg_delay = res['avg_delay_s']
+    loss = res['loss_rate']
+    throughput = res['throughput_pps']
+    cost = avg_delay + 50.0 * loss - 0.001 * throughput
+    return cost, {'avg_delay': avg_delay, 'loss': loss, 'throughput': throughput, 'sim': res}
+
+def get_random_solution(bounds):
+    return np.array([np.random.uniform(low, high) for low, high in bounds])
+
+def simple_levy(beta=1.5):
+    sigma_u = ( math.gamma(1+beta) * math.sin(np.pi*beta/2) /
+               ( math.gamma((1+beta)/2) * beta * 2**((beta-1)/2) ) ) ** (1.0/beta)
+    u = np.random.normal(0, sigma_u)
+    v = np.random.normal(0, 1)
+    step = u / (abs(v) ** (1.0/beta))
+    return step
+
+def cuckoo_search(objective_fn, bounds, n_nests=20, n_iter=100, pa=0.25, alpha=0.01, sim_time=5.0, verbose=False, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
+
+    dim = len(bounds)
+    nests = [get_random_solution(bounds) for _ in range(n_nests)]
+    fitness = []
+    meta = []
+    for nest in nests:
+        f, info = objective_fn(nest, sim_time=sim_time, seed=seed)
+        fitness.append(f)
+        meta.append(info)
+    fitness = np.array(fitness)
+
+    best_idx = np.argmin(fitness)
+    best = nests[best_idx].copy()
+    best_f = float(fitness[best_idx])
+    best_info = meta[best_idx]
+
+    history = {'best_f': [], 'best_params': []}
+
+    for it in range(n_iter):
+        for i in range(n_nests):
+            step = np.array([simple_levy() for _ in range(dim)])
+            new = nests[i] + alpha * step * (nests[i] - best)
+            for d in range(dim):
+                low, high = bounds[d]
+                if new[d] < low: new[d] = low + np.random.rand()*(high-low)*0.01
+                if new[d] > high: new[d] = high - np.random.rand()*(high-low)*0.01
+            f_new, info_new = objective_fn(new, sim_time=sim_time, seed=seed)
+            if f_new < fitness[i]:
+                nests[i] = new
+                fitness[i] = f_new
+                meta[i] = info_new
+
+        n_abandon = int(pa * n_nests)
+        if n_abandon > 0:
+            worst_idx = np.argsort(-fitness)[:n_abandon]
+            for idx in worst_idx:
+                nests[idx] = get_random_solution(bounds)
+                f_new, info_new = objective_fn(nests[idx], sim_time=sim_time, seed=seed)
+                fitness[idx] = f_new
+                meta[idx] = info_new
+
+        cur_best_idx = np.argmin(fitness)
+        cur_best_f = float(fitness[cur_best_idx])
+        if cur_best_f < best_f:
+            best_f = cur_best_f
+            best = nests[cur_best_idx].copy()
+            best_info = meta[cur_best_idx]
+
+        history['best_f'].append(best_f)
+        history['best_params'].append(best.copy())
+
+        if verbose and (it % max(1, n_iter//10) == 0 or it==n_iter-1):
+            print(f"Iter {it+1}/{n_iter}: best_f={best_f:.6f}, params={best}")
+
+    return {'best_params': best, 'best_f': best_f, 'best_info': best_info, 'history': history}
+
+if __name__ == "__main__" or True:
+    bounds = [
+        (64.0, 1500.0),
+        (10.0, 500.0),
+        (1.0, 200.0)
+    ]
+
+    start = time.time()
+    res = cuckoo_search(objective, bounds,
+                        n_nests=25,
+                        n_iter=80,
+                        pa=0.2,
+                        alpha=0.05,
+                        sim_time=5.0,
+                        verbose=True,
+                        seed=42)
+    end = time.time()
+    print("\nFinished optimization in {:.2f}s".format(end - start))
+    best_params = res['best_params']
+    best_decoded = {
+        'packet_size_bytes': float(best_params[0]),
+        'send_rate_pps': float(best_params[1]),
+        'buffer_size_pkts': int(round(best_params[2]))
+    }
+    print("Best parameters found:", best_decoded)
+    print("Best objective value:", res['best_f'])
+    print("Best simulation metrics:", res['best_info'])
+
+    cost_long, info_long = objective(best_params, sim_time=20.0, seed=123)
+    print("\nLong-run evaluation (20s sim): cost={:.6f}, avg_delay={:.6f}s, loss={:.6f}, throughput_pps={:.2f}"
+          .format(cost_long, info_long['avg_delay'], info_long['loss'], info_long['throughput']))
+
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(res['history']['best_f'], marker='o', linewidth=1)
+    ax.set_xlabel('Iteration')
+    ax.set_ylabel('Best objective')
+    ax.set_title('Cuckoo Search convergence')
+    ax.grid(True)
+    plt.show()
