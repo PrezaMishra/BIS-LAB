@@ -1,0 +1,106 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Objective function: Sum of squared distances to closest centroid
+def fitness_function(centroids, data, k):
+    centroids = centroids.reshape(k, -1)  # reshape to k centroids with dimension = data's dim
+    distances = np.linalg.norm(data[:, None] - centroids[None, :], axis=2)  # Distance from each data point to each centroid
+    closest_centroid_dist = np.min(distances, axis=1)  # For each point, the distance to closest centroid
+    return np.sum(closest_centroid_dist**2)  # Sum of squared distances = clustering inertia
+
+# PSO Parameters
+N = 30              # number of particles
+MaxIter = 100       # number of iterations
+w = 0.7             # inertia weight
+c1 = 1.5            # cognitive coefficient
+c2 = 1.5            # social coefficient
+
+# Generate synthetic data (3 clusters, 2D)
+np.random.seed(42)
+data = np.vstack([
+    np.random.normal(loc=0, scale=1, size=(50, 2)),
+    np.random.normal(loc=5, scale=1, size=(50, 2)),
+    np.random.normal(loc=10, scale=1, size=(50, 2))
+])
+k = 3               # number of clusters
+dim = data.shape[1] # dimensionality of data
+
+# Search space bounds (min and max of each dimension in data)
+Xmin = np.min(data, axis=0)
+Xmax = np.max(data, axis=0)
+
+# Initialize particles (each particle represents k centroids flattened)
+particles = np.random.uniform(low=Xmin.repeat(k), high=Xmax.repeat(k), size=(N, k*dim))
+velocities = np.random.uniform(low=-(Xmax - Xmin).repeat(k), high=(Xmax - Xmin).repeat(k), size=(N, k*dim))
+
+pbest_positions = particles.copy()
+pbest_scores = np.array([fitness_function(p, data, k) for p in particles])
+
+gbest_idx = np.argmin(pbest_scores)
+gbest_position = pbest_positions[gbest_idx].copy()
+gbest_score = pbest_scores[gbest_idx]
+
+fitness_history = []
+
+# PSO main loop
+for iter in range(MaxIter):
+    for i in range(N):
+        r1, r2 = np.random.rand(k*dim), np.random.rand(k*dim)
+        velocities[i] = (w * velocities[i] +
+                         c1 * r1 * (pbest_positions[i] - particles[i]) +
+                         c2 * r2 * (gbest_position - particles[i]))
+        particles[i] += velocities[i]
+
+        # Bound check (keep centroids inside data range)
+        particles[i] = np.maximum(particles[i], Xmin.repeat(k))
+        particles[i] = np.minimum(particles[i], Xmax.repeat(k))
+
+        fitness = fitness_function(particles[i], data, k)
+
+        # Update personal best
+        if fitness < pbest_scores[i]:
+            pbest_positions[i] = particles[i].copy()
+            pbest_scores[i] = fitness
+
+            # Update global best
+            if fitness < gbest_score:
+                gbest_position = particles[i].copy()
+                gbest_score = fitness
+
+    fitness_history.append(gbest_score)
+    print(f"Iteration {iter+1}/{MaxIter}, Best Fitness: {gbest_score:.4f}")
+
+# Final centroids and cluster assignment
+final_centroids = gbest_position.reshape(k, dim)
+distances = np.linalg.norm(data[:, None] - final_centroids[None, :], axis=2)
+clusters = np.argmin(distances, axis=1)
+
+print("\nFinal cluster centroids:\n", final_centroids)
+print("\nCluster assignments for first 10 points:\n", clusters[:10])
+
+# Plot clusters and centroids
+plt.figure(figsize=(10,4))
+
+plt.subplot(1, 2, 1)
+colors = ['r', 'g', 'b']
+for i in range(k):
+    cluster_points = data[clusters == i]
+    plt.scatter(cluster_points[:, 0], cluster_points[:, 1], s=30, c=colors[i], label=f'Cluster {i+1}')
+plt.scatter(final_centroids[:, 0], final_centroids[:, 1], s=200, c='yellow', edgecolors='black', marker='X', label='Centroids')
+plt.title('PSO Clustering Result')
+plt.xlabel('Feature 1')
+plt.ylabel('Feature 2')
+plt.legend()
+plt.grid(True)
+
+# Plot fitness convergence
+plt.subplot(1, 2, 2)
+plt.plot(range(1, MaxIter+1), fitness_history, 'b-', linewidth=2)
+plt.title('Fitness Convergence Over Iterations')
+plt.xlabel('Iteration')
+plt.ylabel('Best Fitness')
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+print('Preza Mishra')
