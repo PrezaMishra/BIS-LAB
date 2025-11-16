@@ -1,0 +1,110 @@
+# ============================================
+# Edge Detection using Parallel Cellular Algorithm
+# ============================================
+
+import numpy as np
+import cv2
+import matplotlib.pyplot as plt
+from google.colab import files
+from concurrent.futures import ThreadPoolExecutor
+
+# -------------------------------
+# Step 1: Upload Image
+# -------------------------------
+print("📸 Upload an image file...")
+uploaded = files.upload()
+image_path = list(uploaded.keys())[0]
+
+# Read and convert to grayscale
+image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+image = cv2.resize(image, (256, 256))  # resize for faster processing
+plt.imshow(image, cmap='gray')
+plt.title("Original Image")
+plt.axis('off')
+plt.show()
+
+# -------------------------------
+# Step 2: Define Parameters
+# -------------------------------
+N = image.shape[0] * image.shape[1]      # total number of cells
+max_iterations = 10                      # number of iterations
+rows, cols = image.shape
+
+# Normalize image (0 to 1 range)
+cell_state = image / 255.0
+
+# -------------------------------
+# Step 3: Define Fitness Function
+# -------------------------------
+def fitness(cell_value):
+    # Higher gradient => stronger edge
+    return cell_value
+
+# -------------------------------
+# Step 4: Neighborhood Function
+# -------------------------------
+def get_neighbors(i, j):
+    neighbors = []
+    for di in [-1, 0, 1]:
+        for dj in [-1, 0, 1]:
+            if di == 0 and dj == 0:
+                continue
+            ni, nj = i + di, j + dj
+            if 0 <= ni < rows and 0 <= nj < cols:
+                neighbors.append((ni, nj))
+    return neighbors
+
+# -------------------------------
+# Step 5: Update Rule (Edge Detection Logic)
+# -------------------------------
+def update_rule(i, j, grid):
+    neighbors = get_neighbors(i, j)
+    current_val = grid[i, j]
+    neighbor_vals = [grid[ni, nj] for ni, nj in neighbors]
+
+    # Calculate difference with average of neighbors (gradient strength)
+    diff = abs(current_val - np.mean(neighbor_vals))
+
+    # Threshold to highlight edges
+    new_val = 1.0 if diff > 0.1 else 0.0
+    return new_val
+
+# -------------------------------
+# Step 6: Parallel Cellular Update
+# -------------------------------
+def parallel_update(grid):
+    new_grid = np.zeros_like(grid)
+
+    def update_cell(i, j):
+        return update_rule(i, j, grid)
+
+    with ThreadPoolExecutor() as executor:
+        futures = {}
+        for i in range(rows):
+            for j in range(cols):
+                futures[executor.submit(update_cell, i, j)] = (i, j)
+
+        for future in futures:
+            i, j = futures[future]
+            new_grid[i, j] = future.result()
+
+    return new_grid
+
+# -------------------------------
+# Step 7: Main Loop
+# -------------------------------
+iteration = 0
+for iteration in range(max_iterations):
+    print(f"Iteration {iteration + 1}/{max_iterations}")
+    cell_state = parallel_update(cell_state)
+
+# -------------------------------
+# Step 8: Display Result
+# -------------------------------
+plt.imshow(cell_state, cmap='gray')
+plt.title("Detected Edges (Parallel Cellular Algorithm)")
+plt.axis('off')
+plt.show()
+
+print("Edge Detection Completed!")
+print("Preza Mishra")
