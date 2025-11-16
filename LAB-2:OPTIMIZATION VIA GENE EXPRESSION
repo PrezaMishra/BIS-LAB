@@ -1,0 +1,162 @@
+!pip install deap pandas matplotlib numpy
+
+import numpy as np
+import pandas as pd
+import operator
+import math
+import random
+import matplotlib.pyplot as plt
+
+from deap import base, creator, tools, gp
+
+np.random.seed(42)
+n_points = 400
+returns = np.random.normal(loc=0.0005, scale=0.01, size=n_points)
+price = 100 * (1 + returns).cumprod()
+
+data = pd.DataFrame({"price": price})
+data["ret"] = data["price"].pct_change()
+data.dropna(inplace=True)
+data.reset_index(drop=True, inplace=True)
+
+max_lag = 5
+for lag in range(1, max_lag + 1):
+    data[f"ret_lag_{lag}"] = data["ret"].shift(lag)
+data.dropna(inplace=True)
+data.reset_index(drop=True, inplace=True)
+
+feature_cols = [f"ret_lag_{lag}" for lag in range(1, max_lag + 1)]
+X = data[feature_cols].values
+y = data["ret"].values
+
+split_ratio = 0.7
+split_idx = int(len(X) * split_ratio)
+X_train, X_test = X[:split_idx], X[split_idx:]
+y_train, y_test = y[:split_idx], y[split_idx:]
+
+def protected_div(left, right):
+    try:
+        return left / right if abs(right) > 1e-6 else left
+    except:
+        return left
+
+def protected_log(x):
+    try:
+        return math.log(abs(x) + 1e-6)
+    except:
+        return 0.0
+
+pset = gp.PrimitiveSet("MAIN", max_lag)
+pset.addPrimitive(operator.add, 2)
+pset.addPrimitive(operator.sub, 2)
+pset.addPrimitive(operator.mul, 2)
+pset.addPrimitive(protected_div, 2)
+pset.addPrimitive(math.sin, 1)
+pset.addPrimitive(math.cos, 1)
+pset.addPrimitive(protected_log, 1)
+pset.addEphemeralConstant("rand", lambda: random.uniform(-1, 1))
+
+for i in range(max_lag):
+    pset.renameArguments(**{f"ARG{i}": f"lag{i+1}"})
+
+creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
+
+toolbox = base.Toolbox()
+toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=3)
+toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
+toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+toolbox.register("compile", gp.compile, pset=pset)
+
+def eval_individual(individual):
+    func = toolbox.compile(expr=individual)
+    preds = []
+    for row in X_train:
+        preds.append(func(*row))
+    preds = np.array(preds)
+    mse = ((preds - y_train) ** 2).mean()
+    if not np.isfinite(mse):
+        mse = 1e6
+    return (mse,)
+
+toolbox.register("evaluate", eval_individual)
+toolbox.register("select", tools.selTournament, tournsize=3)
+toolbox.register("mate", gp.cxOnePoint)
+toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
+toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
+
+toolbox.decorate("mate", gp.staticLimit(key=len, max_value=25))
+toolbox.decorate("mutate", gp.staticLimit(key=len, max_value=25))
+
+pop_size = 120
+n_gen = 40
+cx_prob = 0.8
+mut_prob = 0.2
+
+pop = toolbox.population(n=pop_size)
+hof = tools.HallOfFame(1)
+stats = tools.Statistics(lambda ind: ind.fitness.values)
+stats.register("min", np.min)
+stats.register("avg", np.mean)
+
+best_mse_history = []
+
+for gen in range(1, n_gen + 1):
+    offspring = toolbox.select(pop, len(pop))
+    offspring = list(map(toolbox.clone, offspring))
+
+    for child1, child2 in zip(offspring[::2], offspring[1::2]):
+        if random.random() < cx_prob:
+            toolbox.mate(child1, child2)
+            del child1.fitness.values, child2.fitness.values
+
+    for mutant in offspring:
+        if random.random() < mut_prob:
+            toolbox.mutate(mutant)
+            del mutant.fitness.values
+
+    invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+    fitnesses = toolbox.map(toolbox.evaluate, invalid_ind)
+    for ind, fit in zip(invalid_ind, fitnesses):
+        ind.fitness.values = fit
+
+    pop[:] = offspring
+    hof.update(pop)
+
+    record = stats.compile(pop)
+    best_mse_history.append(record["min"])
+    print(f"Gen {gen}/{n_gen} | Best MSE: {record['min']:.6f}")
+
+best_ind = hof[0]
+print("\nBest evolved expression:\n")
+print(best_ind)
+
+best_func = toolbox.compile(expr=best_ind)
+
+train_pred = np.array([best_func(*row) for row in X_train])
+test_pred = np.array([best_func(*row) for row in X_test])
+
+train_mse = ((train_pred - y_train) ** 2).mean()
+test_mse = ((test_pred - y_test) ** 2).mean()
+
+print("\nTraining MSE:", train_mse)
+print("Testing MSE:", test_mse)
+
+plt.figure(figsize=(6, 4))
+plt.plot(best_mse_history)
+plt.xlabel("Generation")
+plt.ylabel("Best MSE")
+plt.grid(True)
+plt.title("GP Optimization - Financial Forecasting")
+plt.show()
+
+plt.figure(figsize=(8, 4))
+plt.plot(y_test, label="Actual")
+plt.plot(test_pred, label="Predicted")
+plt.title("Actual vs Predicted Returns")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+print("\nFINANCIAL FORECASTING OPTIMIZATION COMPLETED")
+print("DEVELOPED FOR: PREZA MISHRA")
