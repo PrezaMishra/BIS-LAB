@@ -1,0 +1,162 @@
+import numpy as np
+import random
+import matplotlib.pyplot as plt
+
+GRID_ROWS = 10
+GRID_COLS = 10
+START = (0, 0)
+GOAL = (9, 9)
+
+OBSTACLES = {
+    (3, 3), (3, 4), (3, 5),
+    (4, 5), (5, 5),
+    (6, 2), (6, 3),
+    (7, 7), (7, 8),
+    (2, 8), (2, 9)
+}
+
+MAX_STEPS = 30
+MOVE_DELTAS = {
+    0: (-1, 0),
+    1: (1, 0),
+    2: (0, -1),
+    3: (0, 1)
+}
+
+POPULATION_SIZE = 80
+GENERATIONS = 100
+MUTATION_RATE = 0.05
+CROSSOVER_RATE = 0.8
+TOURNAMENT_SIZE = 3
+ELITE_COUNT = 2
+
+def is_valid_cell(cell):
+    r, c = cell
+    if r < 0 or r >= GRID_ROWS or c < 0 or c >= GRID_COLS:
+        return False
+    if cell in OBSTACLES:
+        return False
+    return True
+
+def random_individual():
+    return np.random.randint(0, 4, size=MAX_STEPS)
+
+def decode_path(individual):
+    path = [START]
+    current = START
+    collisions = 0
+    for move in individual:
+        dr, dc = MOVE_DELTAS[int(move)]
+        next_cell = (current[0] + dr, current[1] + dc)
+        if is_valid_cell(next_cell):
+            current = next_cell
+        else:
+            collisions += 1
+        path.append(current)
+        if current == GOAL:
+            break
+    return path, collisions
+
+def manhattan_distance(a, b):
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+def fitness(individual):
+    path, collisions = decode_path(individual)
+    final_pos = path[-1]
+    distance_to_goal = manhattan_distance(final_pos, GOAL)
+    path_length = len(path)
+    cost = distance_to_goal * 2.0 + collisions * 3.0 + path_length * 0.2
+    if final_pos == GOAL:
+        cost *= 0.3
+    return 1.0 / (1.0 + cost)
+
+def tournament_selection(population, fitnesses):
+    best_idx = None
+    for _ in range(TOURNAMENT_SIZE):
+        idx = random.randint(0, len(population) - 1)
+        if best_idx is None or fitnesses[idx] > fitnesses[best_idx]:
+            best_idx = idx
+    return population[best_idx].copy()
+
+def single_point_crossover(parent1, parent2):
+    if random.random() > CROSSOVER_RATE:
+        return parent1.copy(), parent2.copy()
+    point = random.randint(1, MAX_STEPS - 1)
+    child1 = np.concatenate((parent1[:point], parent2[point:]))
+    child2 = np.concatenate((parent2[:point], parent1[point:]))
+    return child1, child2
+
+def mutate(individual):
+    for i in range(MAX_STEPS):
+        if random.random() < MUTATION_RATE:
+            individual[i] = random.randint(0, 3)
+    return individual
+
+def run_genetic_algorithm():
+    population = [random_individual() for _ in range(POPULATION_SIZE)]
+    best_fitness_history = []
+    best_individual_ever = None
+    best_fitness_ever = -np.inf
+
+    for gen in range(GENERATIONS):
+        fitnesses = np.array([fitness(ind) for ind in population])
+        gen_best_idx = np.argmax(fitnesses)
+        gen_best_fit = fitnesses[gen_best_idx]
+        gen_best_ind = population[gen_best_idx].copy()
+        if gen_best_fit > best_fitness_ever:
+            best_fitness_ever = gen_best_fit
+            best_individual_ever = gen_best_ind
+        best_fitness_history.append(best_fitness_ever)
+        new_population = []
+        elite_indices = np.argsort(-fitnesses)[:ELITE_COUNT]
+        for idx in elite_indices:
+            new_population.append(population[idx].copy())
+        while len(new_population) < POPULATION_SIZE:
+            parent1 = tournament_selection(population, fitnesses)
+            parent2 = tournament_selection(population, fitnesses)
+            child1, child2 = single_point_crossover(parent1, parent2)
+            new_population.append(mutate(child1))
+            if len(new_population) < POPULATION_SIZE:
+                new_population.append(mutate(child2))
+        population = new_population
+
+    return best_individual_ever, best_fitness_history
+
+best_individual, best_fitness_history = run_genetic_algorithm()
+best_path, best_collisions = decode_path(best_individual)
+final_pos = best_path[-1]
+reached_goal = (final_pos == GOAL)
+
+print("\nBest Moves:", best_individual)
+print("Path:", best_path)
+print("Steps:", len(best_path))
+print("Collisions:", best_collisions)
+print("Final:", final_pos)
+print("Goal Reached:", reached_goal)
+print("Fitness:", best_fitness_history[-1])
+
+plt.figure(figsize=(6, 4))
+plt.plot(best_fitness_history)
+plt.xlabel("Generation")
+plt.ylabel("Best Fitness")
+plt.grid(True)
+plt.show()
+
+grid = np.zeros((GRID_ROWS, GRID_COLS))
+for (r, c) in OBSTACLES:
+    grid[r, c] = -1
+plt.figure(figsize=(5, 5))
+plt.imshow(grid, origin='upper')
+for (r, c) in OBSTACLES:
+    plt.text(c, r, "X", ha='center', va='center')
+plt.text(START[1], START[0], "S", ha='center', va='center')
+plt.text(GOAL[1], GOAL[0], "G", ha='center', va='center')
+
+path_rows = [pos[0] for pos in best_path]
+path_cols = [pos[1] for pos in best_path]
+plt.plot(path_cols, path_rows, marker='o')
+plt.gca().invert_yaxis()
+plt.colorbar()
+plt.show()
+
+print("\nPREZA MISHRA")
